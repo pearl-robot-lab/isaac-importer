@@ -1,0 +1,160 @@
+import blender_asset_cfg
+
+from isaaclab.assets import RigidObjectCollectionCfg
+
+MANIBOT_SUPERMARKET = RigidObjectCollectionCfg(
+    rigid_objects=blender_asset_cfg.define_asset_configs(
+        reference_stage_path="/isaac-sim/pearl-manibot/assets/usd/convenience_store/store_full.usda",
+        default_rigid_body_behavior="static",
+        default_collision_approximation_method="convex_decomposition",
+        asset_collision_approximation_method={
+            "Cube_045": "mesh_simplification",  # Outside Walls
+            "Bodyframe": "sdf",  # Shelves
+            "crispix.*": "sdf",  # Test
+        },
+        dynamic_assets=["crispix.*"],
+        static_assets=[
+            # Shelves
+            "Bodyframe",
+            # Outside Walls
+            "Cube_045",
+            # Slat-Walls
+            "Cube_081",
+            "Cube_096",
+            "Cube_097",
+            "Cube_098",
+            "Cube_099",
+            # Cash-Register
+            "Cash_desk",
+            "Monitor",
+            "Register",
+            # Scanners
+            "Cube_043",
+            "Cube_044",
+            "Cube_049",
+            # Overhead-Lights
+            "Cube_046",
+            "Cube_047",
+            "Cube_048",
+            "Cube_050",
+            "Cube_051",
+            "Cube_052",
+            "Cube_053",
+            "Cube_054",
+            "Cube_055",
+            "Cube_056",
+            "Cube_057",
+            "Cube_058",
+            "Cube_059",
+            "Cube_101",
+            "Cube_102",
+            # Ceiling Accent
+            "Cube_103",
+            "Cube_104",
+            "Cube_105",
+            "Cube_106",
+            # Ground Floor
+            "Cube_157",
+            "Plane",
+            # Wall Panels
+            "Cube_060",
+            "Cube_061",
+            "Cube_063",
+            "Cube_065",
+            "Cube_066",
+            "Cube_067",
+            "Cube_068",
+            "Cube_069",
+            "Cube_070",
+            "Cube_071",
+            "Cube_073",
+            "Cube_074",
+            "Cube_075",
+            "Cube_076",
+            "Cube_077",
+            "Cube_078",
+            "Cube_079",
+            "Cube_080",
+            "Cube_082",
+            "Cube_083",
+            "Cube_085",
+            "Cube_086",
+            "Cube_087",
+            "Cube_088",
+            "Cube_089",
+            "Cube_090",
+            "Cube_091",
+            "Cube_092",
+            "Cube_093",
+            "Cube_094",
+            "Cube_095",
+            # Exterior Panels
+            "Cube_100",
+            "Cube_123",
+            "Cube_136",
+            "Cube_146",
+            # Exterior Lights
+            "Cube_107",
+            "Cube_108",
+            "Cube_109",
+            "Cube_110",
+            "Cube_111",
+            "Cube_112",
+            "Cube_113",
+            "Cube_114",
+            "Cube_115",
+            "Cube_116",
+            "Cube_117",
+            "Cube_118",
+            "Cube_119",
+            "Cube_120",
+            "Cube_121",
+            "Cube_122",
+            "Cube_124",
+            "Cube_125",
+            "Cube_126",
+            "Cube_127",
+            "Cube_128",
+            "Cube_129",
+            "Cube_130",
+            "Cube_131",
+            "Cube_132",
+            "Cube_133",
+            "Cube_134",
+            "Cube_135",
+            "Cube_137",
+            "Cube_139",
+            "Cube_141",
+            "Cube_143",
+            "Cube_145",
+            "Cube_148",
+            "Cube_150",
+            "Cube_152",
+            "Cube_154",
+            "Cube_156",
+            # Exterior Walkway
+            "Cube_158",
+            "Cube_159",
+            "Cube_160",
+        ],
+    ),
+)
+
+
+MANIBOT_AISLE = RigidObjectCollectionCfg(
+    rigid_objects=blender_asset_cfg.define_asset_configs(
+        reference_stage_path="/isaac-sim/pearl-manibot/assets/usd/convenience_store/single_aisle.usda",
+        default_rigid_body_behavior="static",
+        default_collision_approximation_method="convex_decomposition",
+        asset_collision_approximation_method={
+            "Cube_045": "mesh_simplification",  # Outside Walls
+            "Bodyframe": "sdf",  # Shelves
+            "crispix.*": "sdf",  # Test
+        },
+        dynamic_assets=["crispix.*"],
+        static_assets=[
+            # Shelves
+            "Bodyframe",
+        ],
+    ),
+)
