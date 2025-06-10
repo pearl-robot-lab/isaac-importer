@@ -179,6 +179,42 @@ class BlenderAsset(ABC):
                     subset_source_prim=child, subset_target=new_subset
                 )
             else:
+                # TODO: add support for files with such a structure:
+                # def Xform "cart_v3"
+                # {
+                #     float3 xformOp:rotateXYZ = (-0.000009334667, -7.194411e-20, -179.99998)
+                #     float3 xformOp:scale = (0.01, 0.01, 0.01)
+                #     double3 xformOp:translate = (3.2967264652252197, 3.122704267501831, -2.483631433847222e-8)
+                #     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+
+                #     def Xform "RootNode_1"
+                #     {
+                #         float3 xformOp:rotateXYZ = (90.000015, -2.7453507e-19, 1.6284437e-12)
+                #         float3 xformOp:scale = (1, 1, 1)
+                #         double3 xformOp:translate = (0, -70.09429931640625, 55.618614196777344)
+                #         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+
+                #         def Xform "RootNode"
+                #         {
+                #             float3 xformOp:rotateXYZ = (8.14222e-13, 1.628444e-12, -2.1477044e-19)
+                #             float3 xformOp:scale = (1, 1, 1)
+                #             double3 xformOp:translate = (0, 0.000007434442522935569, 0)
+                #             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+
+                #             def Xform "MeshBody1"
+                #             {
+                #                 float3 xformOp:rotateXYZ = (8.14222e-13, 1.628444e-12, -2.1477044e-19)
+                #                 float3 xformOp:scale = (1, 1, 1)
+                #                 double3 xformOp:translate = (0, 0.000007434442522935569, 0)
+                #                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+
+                #                 def Mesh "MeshBody1" (
+                #                     active = true
+                #                     prepend apiSchemas = ["MaterialBindingAPI"]
+                #                 )
+                #                 {
+                #                     uniform bool doubleSi
+                continue
                 raise ValueError(f"Type not supported")
 
         # * Apply Physics and what not
