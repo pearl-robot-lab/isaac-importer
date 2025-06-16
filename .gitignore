@@ -169,3 +169,11 @@ cython_debug/
 *.usdc
 *.obj
 *.fbx
+
+# Assets
+assets/** 
+!assets/usd/
+!assets/usd/convenience_store/
+!assets/usd/convenience_store/__init__.py
+!assets/usd/airport/
+!assets/usd/airport/__init__.py
