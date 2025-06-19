@@ -4,15 +4,20 @@ The `BlenderAsset` class holds functions to copy an asset from a reference prim 
 
 from __future__ import annotations
 from abc import ABC
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Optional
 from isaacsim.core.utils.stage import get_current_stage
 import isaacsim.core.utils.prims as prim_utils
 
+from isaacsim.core.utils.prims import get_prim_at_path
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from isaaclab.sim import schemas
 
 from isaaclab.sim.utils import clone
+
+import carb
+
+from utils.usd_tree import PrimNode
 
 if TYPE_CHECKING:
     from blender_asset_cfg import BlenderAssetCfg
@@ -36,34 +41,297 @@ def spawn_asset(
     Returns:
         Usd.Prim: _description_
     """
-    if not prim_utils.is_prim_path_valid(prim_path):
-        prim = prim_utils.create_prim(
-            prim_path,
-            prim_type="Xform",
-            translation=None,
-            orientation=None,
-            scale=None,
+    if BlenderAsset.reference_stage is None:
+        raise ValueError(
+            f"Reference Stage cannot be None! Need References to spawn new assets from!"
         )
-        xform = UsdGeom.Xform(prim)
-        scale_op = list(
-            filter(
-                lambda x: x.GetOpType() == UsdGeom.XformOp.TypeScale,
-                xform.GetOrderedXformOps(),
-            )
-        )[0]
+    source_prim: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
+        cfg.source_node.prim_path
+    )
+    if not source_prim.IsValid():
+        raise RuntimeError(
+            "Source Prim could not be found. Maybe you imported more than one environment? In this case, the stage get's unloaded and filled with different assets, leading to the prim not existing!"
+        )
+    # TODO: We can create an Xform for the asset folder here and then adapt the path accordingly? But simply removing "/World/envs/env_.*/" wont work here because we need to know the env number. We need some type of governing xform to set the scale of our assets. We want to be able to define the scale so that the assets fit into our world.
 
-        scale_op.Set(Gf.Vec3d(*cfg.scale))
-    # else:
-    #     raise ValueError(f"A prim already exists at path: '{prim_path}'.")
+    # TODO: That mwans we would have to create an Xform called "Assets" at this place - if it does not already exist - and then spawn all relevant assets underneath
 
-    BlenderAsset.copy_blender_asset(target_prim_path=str(prim_path), cfg=cfg)
-    return prim_utils.get_prim_at_path(prim_path)
+    # * Spawn Xform to hold the asset
+    # Adapt the path to include 'assets' folder in the hierarchy
+    # target_prim_path = (
+    #     Sdf.Path(prim_path)
+    #     .GetParentPath()  # path up to env_.*
+    #     .AppendChild("assets")  # include 'assets' folder to keep hierarchy clean
+    #     .AppendChild(Sdf.Path(prim_path).elementString)  # last element of original path
+    # )(
+    target_prim_path = Sdf.Path(prim_path)
+    new_xform = BlenderAsset.spawn_xform(
+        source_prim=source_prim, target_prim_path=target_prim_path, cfg=cfg
+    )
+    Usd.ModelAPI(new_xform).SetKind("component")
+
+    # * Create children, if present
+    BlenderAsset.spawn_prims_recursive(
+        target_prim_path=target_prim_path, prims=cfg.source_node.children, cfg=cfg
+    )
+
+    return new_xform.GetPrim()
+    # BlenderAsset.copy_blender_asset(target_prim_path=str(prim_path), cfg=cfg)
+    # return prim_utils.get_prim_at_path(prim_path)
 
 
 class BlenderAsset(ABC):
 
     reference_stage = None
     reference_prim = None
+
+    @classmethod
+    def spawn_prims_recursive(
+        cls, target_prim_path: Sdf.Path, prims: list[PrimNode], cfg: BlenderAssetCfg
+    ) -> None:
+        for prim in prims:
+            source_prim: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(prim.prim_path)  # type: ignore
+
+            # * Go over the implemented types of assets and spawn the corresponding one
+            if source_prim.IsA(UsdGeom.Xform):
+                # Spawn Xform
+                _target_prim_path = target_prim_path.AppendChild(
+                    source_prim.GetName(),
+                )
+                BlenderAsset.spawn_xform(
+                    source_prim=source_prim,
+                    target_prim_path=_target_prim_path,
+                    cfg=None,
+                )
+            elif source_prim.IsA(UsdGeom.Mesh):
+                # Spawn Mesh
+                _target_prim_path = target_prim_path.AppendChild(
+                    f"MSH_{source_prim.GetName()}",
+                )
+                BlenderAsset.spawn_mesh(
+                    source_prim=source_prim,
+                    target_prim_path=_target_prim_path,
+                    cfg=cfg,
+                )
+            elif source_prim.IsA(UsdGeom.Subset):
+                # Spawn GeomSubset
+                _target_prim_path = target_prim_path.AppendChild(
+                    f"GS_{source_prim.GetName()}",
+                )
+                BlenderAsset.spawn_geom_subset(
+                    source_prim=source_prim,
+                    target_prim_path=_target_prim_path,
+                )
+            else:
+                # raise ValueError(f"'{source_prim.GetTypeName()}' not supported")
+                carb.log_warn(f"'{source_prim.GetTypeName()}' not supported")
+                continue
+
+            BlenderAsset.spawn_prims_recursive(
+                target_prim_path=_target_prim_path, prims=prim.children, cfg=cfg
+            )
+
+    @classmethod
+    def spawn_xform(
+        cls,
+        source_prim: Usd.Prim,
+        target_prim_path: Sdf.Path,
+        cfg: Optional[BlenderAssetCfg],
+    ) -> UsdGeom.Xform:
+
+        # new_xform, new_mesh = BlenderAsset.copy_asset(
+        #     xform_source=xform_source,
+        #     mesh_source=mesh_source,
+        #     target_prim_path=target_prim_path,
+        #     cfg=cfg,
+        # )
+        # * Define new xform with the same name as source_prim
+        new_xform = UsdGeom.Xform.Define(get_current_stage(), target_prim_path)
+
+        # Apply transformations from source prim to target prim
+        if (
+            translate := source_prim.GetAttribute("xformOp:translate").Get()  # type: ignore
+        ) is not None:
+            new_xform.AddTranslateOp().Set(translate)  # type: ignore
+        if (
+            rotate := source_prim.GetAttribute("xformOp:rotateXYZ").Get()  # type: ignore
+        ) is not None:
+            new_xform.AddRotateXYZOp().Set(rotate)  # type: ignore
+        if (
+            scale := source_prim.GetAttribute("xformOp:scale").Get()  # type: ignore
+        ) is not None:
+            new_xform.AddScaleOp().Set(scale)  # type: ignore
+        # TODO: What about order?
+
+        # ? Copy all atributes or just the transforms?
+
+        if cfg is None:
+            # Cfg will be None for nested Xforms
+            return new_xform
+
+        # * Apply Physics and what not
+        # note: in case of deformable objects, we need to apply the deformable properties to the mesh prim.
+        #   this is different from rigid objects where we apply the properties to the parent prim.
+        if cfg.deformable_props is not None:
+            # apply mass properties
+            if cfg.mass_props is not None:
+                schemas.define_mass_properties(
+                    new_xform.GetPrim().GetPrimPath(), cfg.mass_props
+                )
+            # apply deformable body properties
+            schemas.define_deformable_body_properties(
+                new_xform.GetPrim().GetPrimPath(), cfg.deformable_props
+            )
+
+        # # apply visual material
+        # if cfg.visual_material is not None:
+        #     if not cfg.visual_material_path.startswith("/"):
+        #         material_path = f"{geom_prim_path}/{cfg.visual_material_path}"
+        #     else:
+        #         material_path = cfg.visual_material_path
+        #     # create material
+        #     cfg.visual_material.func(material_path, cfg.visual_material)
+        #     # apply material
+        #     bind_visual_material(mesh_prim_path, material_path)
+
+        # TODO:
+        # # apply physics material
+        # if cfg.physics_material is not None:
+        #     if not cfg.physics_material_path.startswith("/"):
+        #         material_path = f"{geom_prim_path}/{cfg.physics_material_path}"
+        #     else:
+        #         material_path = cfg.physics_material_path
+        #     # create material
+        #     cfg.physics_material.func(material_path, cfg.physics_material)
+        #     # apply material
+        #     bind_physics_material(mesh_prim_path, material_path)
+
+        # note: we apply the rigid properties to the parent prim in case of rigid objects.
+        # if cfg.rigid_props is not None:
+        #     # apply mass properties
+        #     if cfg.mass_props is not None:
+        #         schemas.define_mass_properties(new_prim_path, cfg.mass_props)
+        #     # apply rigid properties
+        #     schemas.define_rigid_body_properties(new_prim_path, cfg.rigid_props)
+
+        if cfg.rigid_props is not None:
+            # apply mass properties
+            if cfg.mass_props is not None:
+                schemas.define_mass_properties(
+                    new_xform.GetPrim().GetPrimPath(), cfg.mass_props
+                )
+            # apply rigid properties
+            schemas.define_rigid_body_properties(
+                new_xform.GetPrim().GetPrimPath(), cfg.rigid_props
+            )
+
+        return new_xform
+
+    @classmethod
+    def spawn_mesh(
+        cls, source_prim: Usd.Prim, target_prim_path: Sdf.Path, cfg: BlenderAssetCfg
+    ) -> UsdGeom.Mesh:
+        # * Then, read the meshes attributes (see code below) and create a new mesh
+        # mesh_prim_path = Sdf.Path(
+        #     f"{new_prim_path}/{new_xform.GetPrim().GetName()}_{orig_mesh_prim.GetName()}"
+        # )
+
+        new_mesh: UsdGeom.Mesh = UsdGeom.Mesh.Define(
+            get_current_stage(), target_prim_path
+        )
+
+        BlenderAsset.copy_mesh_attributes(mesh_source=source_prim, new_mesh=new_mesh)
+
+        # * Apply materials to the asset.
+        applied_api_schemas = source_prim.GetPrimTypeInfo().GetAppliedAPISchemas()
+        if "MaterialBindingAPI" in applied_api_schemas:
+            orig_material_binding_api = UsdShade.MaterialBindingAPI(source_prim)
+            mat, rel = orig_material_binding_api.ComputeBoundMaterial()  # type: ignore
+            target: Sdf.Path = rel.GetTargets()[0]
+
+            materials = (
+                get_current_stage().GetPrimAtPath("/World/materials").GetAllChildren()
+            )
+
+            new_material_binding_api = UsdShade.MaterialBindingAPI.Apply(
+                new_mesh.GetPrim()
+            )
+            material = list(
+                filter(
+                    lambda mat: mat.GetPath().elementString == target.elementString,
+                    materials,
+                )
+            )[0]
+            new_material_binding_api.Bind(UsdShade.Material(material))
+
+        if cfg.collision_props is not None:
+            # ! SOURCE: exts/isaacsim.core.prims/isaacsim/core/prims/impl/geometry_prim.py
+            # *apply collision approximation to mesh
+            # * - ``"boundingCube"``
+            #   - Bounding Cube
+            #   - An optimally fitting box collider is computed around the mesh
+            if cfg.collision_approximation == "bounding_cube":
+                collision_approximation = "boundingCube"
+
+            # * - ``"boundingSphere"``
+            #   - Bounding Sphere
+            #   - A bounding sphere is computed around the mesh and used as a collider
+            elif cfg.collision_approximation == "bounding_sphere":
+                collision_approximation = "boundingSphere"
+
+            # * - ``"convexDecomposition"``
+            #   - Convex Decomposition
+            #   - A convex mesh decomposition is performed. This results in a set of convex mesh colliders
+            elif cfg.collision_approximation == "convex_decomposition":
+                collision_approximation = "convexDecomposition"
+
+            # * - ``"convexHull"``
+            #   - Convex Hull
+            #   - A convex hull of the mesh is generated and used as the collider
+            elif cfg.collision_approximation == "convex_hull":
+                collision_approximation = "convexHull"
+
+            # * - ``"meshSimplification"``
+            #   - Mesh Simplification
+            #   - A mesh simplification step is performed, resulting in a simplified triangle mesh collider
+            elif cfg.collision_approximation == "mesh_simplification":
+                collision_approximation = "meshSimplification"
+
+            # * - ``"sdf"``
+            #   - SDF Mesh
+            #   - SDF (Signed-Distance-Field) use high-detail triangle meshes as collision shape
+            elif cfg.collision_approximation == "sdf":
+                collision_approximation = "sdf"
+
+            # * - ``"sphereFill"``
+            #   - Sphere Approximation
+            #   - A sphere mesh decomposition is performed. This results in a set of sphere colliders
+            elif cfg.collision_approximation == "sphere_approximation":
+                collision_approximation = "sphereFill"
+
+            # * - ``"none"``
+            #   - Triangle Mesh
+            #   - The mesh geometry is used directly as a collider without any approximation
+            else:
+                collision_approximation = "none"
+
+            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(new_mesh.GetPrim())  # type: ignore
+            mesh_collision_api.GetApproximationAttr().Set(collision_approximation)
+
+            # apply collision properties
+            schemas.define_collision_properties(target_prim_path, cfg.collision_props)
+        new_mesh.GetPrim().SetMetadata("instanceable", False)
+        return new_mesh
+
+    @classmethod
+    def spawn_geom_subset(
+        cls, source_prim: Usd.Prim, target_prim_path: Sdf.Path
+    ) -> UsdGeom.Subset:
+        new_subset = UsdGeom.Subset.Define(get_current_stage(), target_prim_path)
+        BlenderAsset.copy_geomsubset_attributes(
+            subset_source_prim=source_prim, subset_target=new_subset
+        )
+        return new_subset
 
     @classmethod
     def copy_blender_asset(cls, target_prim_path: str, cfg: BlenderAssetCfg) -> None:
@@ -77,19 +345,19 @@ class BlenderAsset(ABC):
             RuntimeError: Reference stage cannot be None.
             RuntimeError: When more than one environment gets loaded, the prim references and the reference stage will no longer match, causing invalid null prims.
         """
-        # * Get prims from reference stage.
-        if BlenderAsset.reference_stage is None or BlenderAsset.reference_prim is None:
-            raise RuntimeError("References cannot be None!")
-        xform_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
-            cfg.xform_source
-        )
-        mesh_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
-            cfg.mesh_source
-        )
-        if not xform_source.IsValid() or not xform_source.IsValid():
-            raise RuntimeError(
-                "Source Prims could not be found. Maybe you imported more than one environment? In this case, the stge get's unloaded and filled with different assets, leading to the prim not existing!"
-            )
+        # # * Get prims from reference stage.
+        # if BlenderAsset.reference_stage is None or BlenderAsset.reference_prim is None:
+        #     raise RuntimeError("References cannot be None!")
+        # xform_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
+        #     cfg.xform_source
+        # )
+        # mesh_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
+        #     cfg.mesh_source
+        # )
+        # if not xform_source.IsValid() or not xform_source.IsValid():
+        #     raise RuntimeError(
+        #         "Source Prims could not be found. Maybe you imported more than one environment? In this case, the stge get's unloaded and filled with different assets, leading to the prim not existing!"
+        #     )
 
         # * Copy the asset
         new_xform, new_mesh = BlenderAsset.copy_asset(
@@ -154,9 +422,10 @@ class BlenderAsset(ABC):
         new_xform = UsdGeom.Xform.Define(get_current_stage(), new_prim_path)
 
         # * Apply Transformations to new prim and define order
-        new_xform.AddTranslateOp().Set(xform_source.GetAttribute("xformOp:translate").Get())  # type: ignore
-        new_xform.AddRotateXYZOp().Set(xform_source.GetAttribute("xformOp:rotateXYZ").Get())  # type: ignore
-        new_xform.AddScaleOp().Set(xform_source.GetAttribute("xformOp:scale").Get())  # type: ignore
+        # # TODO: Find out why this breaks for the airport environment
+        # new_xform.AddTranslateOp().Set(xform_source.GetAttribute("xformOp:translate").Get())  # type: ignore
+        # new_xform.AddRotateXYZOp().Set(xform_source.GetAttribute("xformOp:rotateXYZ").Get())  # type: ignore
+        # new_xform.AddScaleOp().Set(xform_source.GetAttribute("xformOp:scale").Get())  # type: ignore
 
         # * Then, read the meshes attributes (see code below) and create a new mesh
         mesh_prim_path = Sdf.Path(
@@ -178,43 +447,14 @@ class BlenderAsset(ABC):
                 BlenderAsset.copy_geomsubset_attributes(
                     subset_source_prim=child, subset_target=new_subset
                 )
+            elif child.IsA(UsdGeom.Xform):
+                name = child.GetName()
+                xform_path = mesh_prim_path.AppendChild(f"{name}")
+                new_xform = UsdGeom.Xform.Define(get_current_stage(), xform_path)
+                BlenderAsset.copy_xform_attributes(
+                    xform_source_prim=child, xform_target=new_xform
+                )
             else:
-                # TODO: add support for files with such a structure:
-                # def Xform "cart_v3"
-                # {
-                #     float3 xformOp:rotateXYZ = (-0.000009334667, -7.194411e-20, -179.99998)
-                #     float3 xformOp:scale = (0.01, 0.01, 0.01)
-                #     double3 xformOp:translate = (3.2967264652252197, 3.122704267501831, -2.483631433847222e-8)
-                #     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-
-                #     def Xform "RootNode_1"
-                #     {
-                #         float3 xformOp:rotateXYZ = (90.000015, -2.7453507e-19, 1.6284437e-12)
-                #         float3 xformOp:scale = (1, 1, 1)
-                #         double3 xformOp:translate = (0, -70.09429931640625, 55.618614196777344)
-                #         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-
-                #         def Xform "RootNode"
-                #         {
-                #             float3 xformOp:rotateXYZ = (8.14222e-13, 1.628444e-12, -2.1477044e-19)
-                #             float3 xformOp:scale = (1, 1, 1)
-                #             double3 xformOp:translate = (0, 0.000007434442522935569, 0)
-                #             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-
-                #             def Xform "MeshBody1"
-                #             {
-                #                 float3 xformOp:rotateXYZ = (8.14222e-13, 1.628444e-12, -2.1477044e-19)
-                #                 float3 xformOp:scale = (1, 1, 1)
-                #                 double3 xformOp:translate = (0, 0.000007434442522935569, 0)
-                #                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-
-                #                 def Mesh "MeshBody1" (
-                #                     active = true
-                #                     prepend apiSchemas = ["MaterialBindingAPI"]
-                #                 )
-                #                 {
-                #                     uniform bool doubleSi
-                continue
                 raise ValueError(f"Type not supported")
 
         # * Apply Physics and what not
@@ -426,80 +666,96 @@ class BlenderAsset(ABC):
             subset_target.CreateIndicesAttr(indices)  # type: ignore
 
     @classmethod
-    def copy_materials(
-        cls, source_prim: dict[Usd.Prim, Any], target_prim_path: Sdf.Path
-    ) -> list[UsdShade.Material]:
-        """Copies the materials from the source to the newly created scene at the provided target prim path.
+    def copy_xform_attributes(
+        cls, xform_source_prim: Usd.Prim, xform_target: UsdGeom.Xform
+    ) -> None:
+        xform_source = UsdGeom.Xform(xform_source_prim)
+        applied_api_schemas = xform_source_prim.GetPrimTypeInfo().GetAppliedAPISchemas()
+        if len(applied_api_schemas) > 0:
+            carb.log_warn(
+                f"The following APIs will not be applied to asset '{xform_source_prim.GetName()}':\n{applied_api_schemas}"
+            )
+        if (
+            translate := xform_source_prim.GetAttribute("xformOp:translate").Get()  # type: ignore
+        ) is not None:
+            xform_target.AddTranslateOp().Set(translate)  # type: ignore
+        if (
+            rotate := xform_source_prim.GetAttribute("xformOp:rotateXYZ").Get()  # type: ignore
+        ) is not None:
+            xform_target.AddRotateXYZOp().Set(rotate)  # type: ignore
+        if (
+            scale := xform_source_prim.GetAttribute("xformOp:scale").Get()  # type: ignore
+        ) is not None:
+            xform_target.AddScaleOp().Set(scale)  # type: ignore
+        # TODO: What about order?
+
+    @classmethod
+    def copy_material(
+        cls, source_material: Usd.Prim, target_prim_path: Sdf.Path
+    ) -> UsdShade.Material:
+        """Copies the material from the source to the newly created scene at the provided target prim path.
 
         Args:
-            source_prim (dict[Usd.Prim, Any]): Source holding all of our materials.
+            source_prim_path (Sdf.Path): Source Path holding the material.
             target_prim_path (Sdf.Path): Target path we want to copy the materials into.
 
         Raises:
             ValueError: Raised when the structure of the source does not match the expected structure.
 
         Returns:
-            list[UsdShade.Material]: List holding the newly created materials.
+            UsdShade.Material: Newly created materials.
         """
-        # * In the beginning, source_prim is the root folder '_materials'
-        if source_prim.GetName() != "_materials":
-            raise ValueError(
-                f"copy_materials expects source prim to be root material folder called '_materials', instead got {source_prim}."
-            )
+        # # * In the beginning, source_prim is the root folder '_materials'
+        # if source_prim.GetName() != "_materials":
+        #     raise ValueError(
+        #         f"copy_materials expects source prim to be root material folder called '_materials', instead got {source_prim}."
+        #     )
 
         # * Create scope for materials:
         material_root_path = Sdf.Path(f"{target_prim_path}/materials")
         materials_root = UsdGeom.Scope.Define(get_current_stage(), material_root_path)
 
-        new_materials = []
+        material = source_material
+        mtl_path = Sdf.Path(f"{material_root_path}/{material.GetName()}")
+        mtl = UsdShade.Material.Define(get_current_stage(), mtl_path)
 
-        materials: list = source_prim.GetAllChildren()
-        for material in materials:
-            mtl_path = Sdf.Path(f"{material_root_path}/{material.GetName()}")
-            mtl = UsdShade.Material.Define(get_current_stage(), mtl_path)
-            new_materials.append(mtl)
+        shaders: list[UsdShade.Shader] = material.GetAllChildren()
 
-            shaders: list[UsdShade.Shader] = material.GetAllChildren()
+        input_queue = {}
 
-            input_queue = {}
+        new_shaders = []
 
-            new_shaders = []
-
-            for _shader in shaders:
-                shader = UsdShade.Shader(_shader)
-                if shader.GetIdAttr().Get() == "UsdPreviewSurface":
-                    new_shader, inputs = BlenderAsset.create_bsdf_shader(
-                        mtl_path, shader
-                    )
-                    mtl.CreateSurfaceOutput().ConnectToSource(
-                        new_shader.ConnectableAPI(), "surface"
-                    )
-                if shader.GetIdAttr().Get() == "UsdUVTexture":
-                    new_shader, inputs = BlenderAsset.create_image_texture_shader(
-                        mtl_path, shader
-                    )
-                if shader.GetIdAttr().Get() == "UsdPrimvarReader_float2":
-                    new_shader, inputs = BlenderAsset.create_uvmap_shader(
-                        mtl_path, shader
-                    )
-                new_shaders.append(new_shader)
-                for key, value in inputs.items():
-                    input_queue[key] = value
-
-            for inpt, source_info in input_queue.items():
-                source_path = mtl_path.AppendPath(
-                    source_info.source.GetPath().elementString
+        for _shader in shaders:
+            shader = UsdShade.Shader(_shader)
+            if shader.GetIdAttr().Get() == "UsdPreviewSurface":
+                new_shader, inputs = BlenderAsset.create_bsdf_shader(mtl_path, shader)
+                mtl.CreateSurfaceOutput().ConnectToSource(
+                    new_shader.ConnectableAPI(), "surface"
                 )
-                source_name = source_info.sourceName
-                prm: Usd.Prim = inpt.GetPrim()
-                valid = prm.IsValid()
-                shader_prim = prim_utils.get_prim_at_path(source_path)
-                if shader_prim.IsValid():
-                    inpt.ConnectToSource(
-                        UsdShade.Shader(shader_prim).ConnectableAPI(), source_name
-                    )
+            if shader.GetIdAttr().Get() == "UsdUVTexture":
+                new_shader, inputs = BlenderAsset.create_image_texture_shader(
+                    mtl_path, shader
+                )
+            if shader.GetIdAttr().Get() == "UsdPrimvarReader_float2":
+                new_shader, inputs = BlenderAsset.create_uvmap_shader(mtl_path, shader)
+            new_shaders.append(new_shader)
+            for key, value in inputs.items():
+                input_queue[key] = value
 
-        return new_materials
+        for inpt, source_info in input_queue.items():
+            source_path = mtl_path.AppendPath(
+                source_info.source.GetPath().elementString
+            )
+            source_name = source_info.sourceName
+            prm: Usd.Prim = inpt.GetPrim()
+            valid = prm.IsValid()
+            shader_prim = prim_utils.get_prim_at_path(source_path)
+            if shader_prim.IsValid():
+                inpt.ConnectToSource(
+                    UsdShade.Shader(shader_prim).ConnectableAPI(), source_name
+                )
+
+        return mtl
 
     @classmethod
     def create_bsdf_shader(

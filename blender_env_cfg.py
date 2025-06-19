@@ -4,6 +4,7 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
+
 # add argparse arguments
 parser = argparse.ArgumentParser(
     description="Demo on spawning different objects in multiple environments.",
@@ -26,6 +27,7 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+args_cli.headless = False
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
@@ -40,21 +42,30 @@ from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils.timer import Timer
 from isaaclab.utils import configclass
-
 from isaaclab.assets import (
     AssetBaseCfg,
     RigidObjectCollection,
 )
+from isaacsim.core.utils.stage import get_current_stage
+from pxr import UsdGeom, Sdf
 
-# from envs.supermarket import MANIBOT_SUPERMARKET
+# from envs.supermarket_full import MANIBOT_SUPERMARKET
 
-# from envs.supermarket import MANIBOT_ISLE
+# from envs.supermarket_single_isle import MANIBOT_ISLE
 
 from envs.airport import MANIBOT_AIRPORT
 
 
 @configclass
 class BlenderSceneCfg(InteractiveSceneCfg):
+    # # Create scopes to hold assets in to keep the tree in the GUI clean.
+    # # Have to create asset folder manually, as IsaacLab won't create it for us.
+    # [
+    #     UsdGeom.Scope.Define(
+    #         get_current_stage(), Sdf.Path(f"/World/envs/env_{i}/Assets")
+    #     )
+    #     for i in range(args_cli.num_envs)
+    # ]
     # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg()
