@@ -49,11 +49,18 @@ from isaaclab.assets import (
 from isaacsim.core.utils.stage import get_current_stage
 from pxr import UsdGeom, Sdf
 
+from envs.airport import MANIBOT_AIRPORT
+
 from envs.supermarket_full import MANIBOT_SUPERMARKET
 
-# from envs.supermarket_single_isle import MANIBOT_ISLE
+from envs.supermarket_single_isle import MANIBOT_ISLE
 
-# from envs.airport import MANIBOT_AIRPORT
+
+# TODO: Something not 100% right, when importing multiple environments.
+# In Supermarket, lamps are pink
+
+# VRAM usage the same, but RAM usage is increase around 3-4GB
+# Every env seems to be stored in RAM. Can do better by unloading
 
 
 @configclass
@@ -77,11 +84,11 @@ class BlenderSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
     )
 
-    # assets = MANIBOT_AIRPORT
+    assets = MANIBOT_AIRPORT
 
     # assets = MANIBOT_ISLE
 
-    assets = MANIBOT_SUPERMARKET
+    # assets = MANIBOT_SUPERMARKET
 
 
 ##

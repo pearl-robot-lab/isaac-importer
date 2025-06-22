@@ -94,20 +94,18 @@ def define_asset_configs(
     """
     # * Open the source `.usd` in a separate stage
     # TODO: Does this really have to be a class variable?  Maybe that's why we get problems when we try to import more than one environment
-    BlenderAsset.reference_stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
-    BlenderAsset.reference_prim = BlenderAsset.reference_stage.GetPrimAtPath(asset_root)  # type: ignore
+    # BlenderAsset.reference_stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
+    # BlenderAsset.reference_prim = BlenderAsset.reference_stage.GetPrimAtPath(asset_root)  # type: ignore
+
+    stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
 
     # * Go over the source and extract all relevant assets and materials
-    root = parse_usd(BlenderAsset.reference_stage)
+    # root = parse_usd(BlenderAsset.reference_stage)
+    root = parse_usd(stage)
     materials = []
     for node in root.children.copy():
-        if node.prim_path.elementString == "_materials":
-            materials.extend(
-                [
-                    BlenderAsset.reference_stage.GetPrimAtPath(child.prim_path)
-                    for child in node.children
-                ]
-            )
+        if node.prim.GetName() == "_materials":
+            materials.extend([child.prim for child in node.children])
             root.children.remove(node)
 
     # assets, materials = _parse_reference_prim(BlenderAsset.reference_prim)  # type: ignore
@@ -134,7 +132,7 @@ def define_asset_configs(
     }
     for prim_node, asset_cfg in asset_cfgs.items():
         cfg = RigidObjectCfg(
-            prim_path=f"/World/envs/env_.*/{prim_node.prim_path.elementString}",
+            prim_path=f"/World/envs/env_.*/{prim_node.prim.GetName()}",
             spawn=BlenderAssetCfg(
                 func=spawn_asset,
                 source_node=prim_node,
@@ -156,87 +154,11 @@ def define_asset_configs(
             ),
         )
 
-        asset_definitions[str(prim_node.prim_path.elementString)] = cfg
+        asset_definitions[str(prim_node.prim.GetName())] = cfg
 
-    # BlenderAsset.reference_stage.Unload(asset_root)  # type: ignore
+    stage.Unload(asset_root)  # type: ignore
 
     return asset_definitions
-
-
-def _parse_reference_prim(
-    reference_prim: Usd.Prim,
-) -> tuple[list[Usd.Prim], list[Usd.Prim]]:
-    """Go over the source and extract all assets, meshes and materials. Ignore all lights.
-
-    Args:
-        reference_prim (Usd.Prim): Pointer showing to the root of the source scene.
-
-    Returns:
-        tuple[list[Usd.Prim], list[Usd.Prim]]: Returns a list of asset pointers and a list of materials.
-    """
-    # * Get all assets by recursively getting all children
-
-    assets: list = reference_prim.GetAllChildren()
-    for asset in assets:
-        assets.extend(asset.GetAllChildren())
-
-    # * Remove all Meshes
-    assets: list[Usd.Prim] = [asset for asset in assets if not asset.IsA(UsdGeom.Mesh)]
-
-    # * remove lights
-    # env_light
-    env_lights = list(filter(lambda x: x.GetName() == "env_light", assets))
-    for light in env_lights:
-        assets.remove(light)
-    # TODO: Find way to include lights
-    # normal lights
-    light_types = [
-        "CylinderLight",
-        "DiskLight",
-        "DistantLight",
-        "DomeLight",
-        "RectLight",
-        "SphereLight",
-    ]
-    lights = list(
-        filter(
-            lambda prim: prim.GetTypeName() in light_types
-            or any(
-                map(
-                    lambda child: child.GetTypeName() in light_types,
-                    prim.GetAllChildren(),
-                )
-            ),
-            assets,
-        )
-    )
-    for light in lights:
-        assets.remove(light)
-
-    # * Filter out materials from assets, keep them separate
-    materials = list(
-        filter(
-            lambda asset: asset.IsA(UsdShade.Material)
-            or asset.IsA(UsdGeom.Subset)
-            or "_materials" in asset.GetPath().pathString,
-            assets,
-        )
-    )
-    for material in materials:
-        assets.remove(material)
-
-    for material in materials.copy():
-        # ? Currently everything is built around "_materials" and us iterating over all its children later.This could be restricting later, when we don't have a _materials folder, but this might be default for blender
-        if material.GetName() != "_materials":
-            materials.remove(material)
-
-    # # * "Area" Assets are currently bugged
-    # For manibot, these usually refer to lights
-    for asset in assets.copy():
-        if "Area" in asset.GetPath().elementString:
-            assets.remove(asset)
-
-    return assets, materials
 
 
 def _create_materials(materials: list[Usd.Prim]) -> None:
@@ -333,13 +255,13 @@ def _parse_asset_config(
         if static_assets is not None:
             for pattern in static_assets:
                 if fnmatch.fnmatch(
-                    asset.prim_path.elementString, pattern.replace(".", "*") + "*"
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
                 ):
                     asset_cfg[asset]["rigid_body_behavior"] = "static"
         if dynamic_assets is not None:
             for pattern in dynamic_assets:
                 if fnmatch.fnmatch(
-                    asset.prim_path.elementString, pattern.replace(".", "*") + "*"
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
                 ):
                     asset_cfg[asset]["rigid_body_behavior"] = "dynamic"
 
@@ -347,7 +269,7 @@ def _parse_asset_config(
         if asset_collision_approximation_method is not None:
             for pattern, method in asset_collision_approximation_method.items():
                 if fnmatch.fnmatch(
-                    asset.prim_path.elementString, pattern.replace(".", "*") + "*"
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
                 ):
                     asset_cfg[asset]["collision_approximation_method"] = method
 

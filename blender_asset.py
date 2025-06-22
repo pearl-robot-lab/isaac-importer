@@ -41,13 +41,14 @@ def spawn_asset(
     Returns:
         Usd.Prim: _description_
     """
-    if BlenderAsset.reference_stage is None:
-        raise ValueError(
-            f"Reference Stage cannot be None! Need References to spawn new assets from!"
-        )
-    source_prim: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
-        cfg.source_node.prim_path
-    )
+    # if BlenderAsset.reference_stage is None:
+    #     raise ValueError(
+    #         f"Reference Stage cannot be None! Need References to spawn new assets from!"
+    #     )
+    source_prim: Usd.Prim = cfg.source_node.prim
+    # source_prim: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
+    #     cfg.source_node.prim_path
+    # )
     if not source_prim.IsValid():
         raise RuntimeError(
             "Source Prim could not be found. Maybe you imported more than one environment? In this case, the stage get's unloaded and filled with different assets, leading to the prim not existing!"
@@ -57,13 +58,6 @@ def spawn_asset(
     # TODO: That mwans we would have to create an Xform called "Assets" at this place - if it does not already exist - and then spawn all relevant assets underneath
 
     # * Spawn Xform to hold the asset
-    # Adapt the path to include 'assets' folder in the hierarchy
-    # target_prim_path = (
-    #     Sdf.Path(prim_path)
-    #     .GetParentPath()  # path up to env_.*
-    #     .AppendChild("assets")  # include 'assets' folder to keep hierarchy clean
-    #     .AppendChild(Sdf.Path(prim_path).elementString)  # last element of original path
-    # )(
     target_prim_path = Sdf.Path(prim_path)
     new_xform = BlenderAsset.spawn_xform(
         source_prim=source_prim, target_prim_path=target_prim_path, cfg=cfg
@@ -72,25 +66,23 @@ def spawn_asset(
 
     # * Create children, if present
     BlenderAsset.spawn_prims_recursive(
-        target_prim_path=target_prim_path, prims=cfg.source_node.children, cfg=cfg
+        target_prim_path=target_prim_path, prim_nodes=cfg.source_node.children, cfg=cfg
     )
 
     return new_xform.GetPrim()
-    # BlenderAsset.copy_blender_asset(target_prim_path=str(prim_path), cfg=cfg)
-    # return prim_utils.get_prim_at_path(prim_path)
 
 
 class BlenderAsset(ABC):
 
-    reference_stage = None
-    reference_prim = None
-
     @classmethod
     def spawn_prims_recursive(
-        cls, target_prim_path: Sdf.Path, prims: list[PrimNode], cfg: BlenderAssetCfg
+        cls,
+        target_prim_path: Sdf.Path,
+        prim_nodes: list[PrimNode],
+        cfg: BlenderAssetCfg,
     ) -> None:
-        for prim in prims:
-            source_prim: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(prim.prim_path)  # type: ignore
+        for prim_node in prim_nodes:
+            source_prim: Usd.Prim = prim_node.prim
 
             # * Go over the implemented types of assets and spawn the corresponding one
             if source_prim.IsA(UsdGeom.Xform):
@@ -128,7 +120,9 @@ class BlenderAsset(ABC):
                 continue
 
             BlenderAsset.spawn_prims_recursive(
-                target_prim_path=_target_prim_path, prims=prim.children, cfg=cfg
+                target_prim_path=_target_prim_path,
+                prim_nodes=prim_node.children,
+                cfg=cfg,
             )
 
     @classmethod
@@ -139,29 +133,12 @@ class BlenderAsset(ABC):
         cfg: Optional[BlenderAssetCfg],
     ) -> UsdGeom.Xform:
 
-        # new_xform, new_mesh = BlenderAsset.copy_asset(
-        #     xform_source=xform_source,
-        #     mesh_source=mesh_source,
-        #     target_prim_path=target_prim_path,
-        #     cfg=cfg,
-        # )
         # * Define new xform with the same name as source_prim
         new_xform = UsdGeom.Xform.Define(get_current_stage(), target_prim_path)
 
-        # Apply transformations from source prim to target prim
-        if (
-            translate := source_prim.GetAttribute("xformOp:translate").Get()  # type: ignore
-        ) is not None:
-            new_xform.AddTranslateOp().Set(translate)  # type: ignore
-        if (
-            rotate := source_prim.GetAttribute("xformOp:rotateXYZ").Get()  # type: ignore
-        ) is not None:
-            new_xform.AddRotateXYZOp().Set(rotate)  # type: ignore
-        if (
-            scale := source_prim.GetAttribute("xformOp:scale").Get()  # type: ignore
-        ) is not None:
-            new_xform.AddScaleOp().Set(scale)  # type: ignore
-        # TODO: What about order?
+        BlenderAsset.copy_xform_attributes(
+            xform_source_prim=source_prim, xform_target=new_xform
+        )
 
         # ? Copy all atributes or just the transforms?
 
@@ -334,245 +311,6 @@ class BlenderAsset(ABC):
         return new_subset
 
     @classmethod
-    def copy_blender_asset(cls, target_prim_path: str, cfg: BlenderAssetCfg) -> None:
-        """Accesses the references in the source scene and copies them into the new scene.
-
-        Args:
-            target_prim_path (str): Path at which we want to spawn the new asset.
-            cfg (BlenderAssetCfg): Configuration for the asset we want to spawn.
-
-        Raises:
-            RuntimeError: Reference stage cannot be None.
-            RuntimeError: When more than one environment gets loaded, the prim references and the reference stage will no longer match, causing invalid null prims.
-        """
-        # # * Get prims from reference stage.
-        # if BlenderAsset.reference_stage is None or BlenderAsset.reference_prim is None:
-        #     raise RuntimeError("References cannot be None!")
-        # xform_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
-        #     cfg.xform_source
-        # )
-        # mesh_source: Usd.Prim = BlenderAsset.reference_stage.GetPrimAtPath(
-        #     cfg.mesh_source
-        # )
-        # if not xform_source.IsValid() or not xform_source.IsValid():
-        #     raise RuntimeError(
-        #         "Source Prims could not be found. Maybe you imported more than one environment? In this case, the stge get's unloaded and filled with different assets, leading to the prim not existing!"
-        #     )
-
-        # * Copy the asset
-        new_xform, new_mesh = BlenderAsset.copy_asset(
-            xform_source=xform_source,
-            mesh_source=mesh_source,
-            target_prim_path=target_prim_path,
-            cfg=cfg,
-        )
-
-        # * Apply materials to the asset.
-        applied_api_schemas = mesh_source.GetPrimTypeInfo().GetAppliedAPISchemas()
-        if "MaterialBindingAPI" in applied_api_schemas:
-            orig_material_binding_api = UsdShade.MaterialBindingAPI(mesh_source)
-            mat, rel = orig_material_binding_api.ComputeBoundMaterial()  # type: ignore
-            target: Sdf.Path = rel.GetTargets()[0]
-
-            materials = (
-                get_current_stage().GetPrimAtPath("/World/materials").GetAllChildren()
-            )
-
-            new_material_binding_api = UsdShade.MaterialBindingAPI.Apply(
-                new_mesh.GetPrim()
-            )
-            material = list(
-                filter(
-                    lambda mat: mat.GetPath().elementString == target.elementString,
-                    materials,
-                )
-            )[0]
-            new_material_binding_api.Bind(UsdShade.Material(material))
-
-        new_mesh.GetPrim().SetMetadata("instanceable", False)
-        Usd.ModelAPI(new_xform).SetKind("component")
-
-        # UsdPhysics.DriveAPI.Apply(new_xform.GetPrim())
-
-    @classmethod
-    def copy_asset(
-        cls,
-        xform_source: Usd.Prim,
-        mesh_source: Usd.Prim,
-        target_prim_path: str,
-        cfg: BlenderAssetCfg,
-    ) -> tuple[UsdGeom.Xform, UsdGeom.Mesh]:
-        """Creates a new Xform and a new Mesh based on the source prim. Applies all relevant APIs and attributes.
-
-        Args:
-            xform_source (Usd.Prim): Source Prim from the input scene.
-            mesh_source (Usd.Prim): Source Mesh from the input scene.
-            target_prim_path (str): Target path to spawn Prim in
-            cfg (BlenderAssetCfg): Configuration for the new asset
-
-        Raises:
-            ValueError: Raised when the Mesh has other children than a GeomSubset. Those types are not supported yet.
-
-        Returns:
-            tuple[UsdGeom.Xform, UsdGeom.Mesh]: The newly created Prim and the corresponding Mesh.
-        """
-        orig_mesh_prim: Usd.Prim = mesh_source
-        # * Define new asset with the same name as source_prim
-        new_prim_path = f"{target_prim_path}/{xform_source.GetName()}"
-        new_xform = UsdGeom.Xform.Define(get_current_stage(), new_prim_path)
-
-        # * Apply Transformations to new prim and define order
-        # # TODO: Find out why this breaks for the airport environment
-        # new_xform.AddTranslateOp().Set(xform_source.GetAttribute("xformOp:translate").Get())  # type: ignore
-        # new_xform.AddRotateXYZOp().Set(xform_source.GetAttribute("xformOp:rotateXYZ").Get())  # type: ignore
-        # new_xform.AddScaleOp().Set(xform_source.GetAttribute("xformOp:scale").Get())  # type: ignore
-
-        # * Then, read the meshes attributes (see code below) and create a new mesh
-        mesh_prim_path = Sdf.Path(
-            f"{new_prim_path}/{new_xform.GetPrim().GetName()}_{orig_mesh_prim.GetName()}"
-        )
-        new_mesh: UsdGeom.Mesh = UsdGeom.Mesh.Define(
-            get_current_stage(), mesh_prim_path
-        )
-
-        BlenderAsset.copy_mesh_attributes(mesh_source=mesh_source, new_mesh=new_mesh)
-
-        # * Copy GeomSubsets
-        children = mesh_source.GetAllChildren()
-        for child in children:
-            if child.IsA(UsdGeom.Subset):
-                name = child.GetName()
-                geomsubset_path = mesh_prim_path.AppendChild(f"GS{name}")
-                new_subset = UsdGeom.Subset.Define(get_current_stage(), geomsubset_path)
-                BlenderAsset.copy_geomsubset_attributes(
-                    subset_source_prim=child, subset_target=new_subset
-                )
-            elif child.IsA(UsdGeom.Xform):
-                name = child.GetName()
-                xform_path = mesh_prim_path.AppendChild(f"{name}")
-                new_xform = UsdGeom.Xform.Define(get_current_stage(), xform_path)
-                BlenderAsset.copy_xform_attributes(
-                    xform_source_prim=child, xform_target=new_xform
-                )
-            else:
-                raise ValueError(f"Type not supported")
-
-        # * Apply Physics and what not
-        # note: in case of deformable objects, we need to apply the deformable properties to the mesh prim.
-        #   this is different from rigid objects where we apply the properties to the parent prim.
-        if cfg.deformable_props is not None:
-            # apply mass properties
-            if cfg.mass_props is not None:
-                schemas.define_mass_properties(
-                    new_xform.GetPrim().GetPrimPath(), cfg.mass_props
-                )
-            # apply deformable body properties
-            schemas.define_deformable_body_properties(
-                new_xform.GetPrim().GetPrimPath(), cfg.deformable_props
-            )
-        elif cfg.collision_props is not None:
-            # ! SOURCE: exts/isaacsim.core.prims/isaacsim/core/prims/impl/geometry_prim.py
-            # *apply collision approximation to mesh
-            # * - ``"boundingCube"``
-            #   - Bounding Cube
-            #   - An optimally fitting box collider is computed around the mesh
-            if cfg.collision_approximation == "bounding_cube":
-                collision_approximation = "boundingCube"
-
-            # * - ``"boundingSphere"``
-            #   - Bounding Sphere
-            #   - A bounding sphere is computed around the mesh and used as a collider
-            elif cfg.collision_approximation == "bounding_sphere":
-                collision_approximation = "boundingSphere"
-
-            # * - ``"convexDecomposition"``
-            #   - Convex Decomposition
-            #   - A convex mesh decomposition is performed. This results in a set of convex mesh colliders
-            elif cfg.collision_approximation == "convex_decomposition":
-                collision_approximation = "convexDecomposition"
-
-            # * - ``"convexHull"``
-            #   - Convex Hull
-            #   - A convex hull of the mesh is generated and used as the collider
-            elif cfg.collision_approximation == "convex_hull":
-                collision_approximation = "convexHull"
-
-            # * - ``"meshSimplification"``
-            #   - Mesh Simplification
-            #   - A mesh simplification step is performed, resulting in a simplified triangle mesh collider
-            elif cfg.collision_approximation == "mesh_simplification":
-                collision_approximation = "meshSimplification"
-
-            # * - ``"sdf"``
-            #   - SDF Mesh
-            #   - SDF (Signed-Distance-Field) use high-detail triangle meshes as collision shape
-            elif cfg.collision_approximation == "sdf":
-                collision_approximation = "sdf"
-
-            # * - ``"sphereFill"``
-            #   - Sphere Approximation
-            #   - A sphere mesh decomposition is performed. This results in a set of sphere colliders
-            elif cfg.collision_approximation == "sphere_approximation":
-                collision_approximation = "sphereFill"
-
-            # * - ``"none"``
-            #   - Triangle Mesh
-            #   - The mesh geometry is used directly as a collider without any approximation
-            else:
-                collision_approximation = "none"
-
-            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(new_mesh.GetPrim())  # type: ignore
-            mesh_collision_api.GetApproximationAttr().Set(collision_approximation)
-
-            # apply collision properties
-            schemas.define_collision_properties(mesh_prim_path, cfg.collision_props)
-
-        # # apply visual material
-        # if cfg.visual_material is not None:
-        #     if not cfg.visual_material_path.startswith("/"):
-        #         material_path = f"{geom_prim_path}/{cfg.visual_material_path}"
-        #     else:
-        #         material_path = cfg.visual_material_path
-        #     # create material
-        #     cfg.visual_material.func(material_path, cfg.visual_material)
-        #     # apply material
-        #     bind_visual_material(mesh_prim_path, material_path)
-
-        # TODO:
-        # # apply physics material
-        # if cfg.physics_material is not None:
-        #     if not cfg.physics_material_path.startswith("/"):
-        #         material_path = f"{geom_prim_path}/{cfg.physics_material_path}"
-        #     else:
-        #         material_path = cfg.physics_material_path
-        #     # create material
-        #     cfg.physics_material.func(material_path, cfg.physics_material)
-        #     # apply material
-        #     bind_physics_material(mesh_prim_path, material_path)
-
-        # note: we apply the rigid properties to the parent prim in case of rigid objects.
-        # if cfg.rigid_props is not None:
-        #     # apply mass properties
-        #     if cfg.mass_props is not None:
-        #         schemas.define_mass_properties(new_prim_path, cfg.mass_props)
-        #     # apply rigid properties
-        #     schemas.define_rigid_body_properties(new_prim_path, cfg.rigid_props)
-
-        if cfg.rigid_props is not None:
-            # apply mass properties
-            if cfg.mass_props is not None:
-                schemas.define_mass_properties(
-                    new_xform.GetPrim().GetPrimPath(), cfg.mass_props
-                )
-            # apply rigid properties
-            schemas.define_rigid_body_properties(
-                new_xform.GetPrim().GetPrimPath(), cfg.rigid_props
-            )
-
-        # * return the asset and the mesh
-        return new_xform, new_mesh
-
-    @classmethod
     def copy_mesh_attributes(
         cls, mesh_source: Usd.Prim, new_mesh: UsdGeom.Mesh
     ) -> None:
@@ -669,7 +407,7 @@ class BlenderAsset(ABC):
     def copy_xform_attributes(
         cls, xform_source_prim: Usd.Prim, xform_target: UsdGeom.Xform
     ) -> None:
-        xform_source = UsdGeom.Xform(xform_source_prim)
+        # xform_source = UsdGeom.Xform(xform_source_prim)
         applied_api_schemas = xform_source_prim.GetPrimTypeInfo().GetAppliedAPISchemas()
         if len(applied_api_schemas) > 0:
             carb.log_warn(
