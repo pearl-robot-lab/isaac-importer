@@ -4,9 +4,10 @@ In order to create the neccesary configs, the importer first loads all assets in
 
 from collections.abc import Callable
 from typing import Any, Literal, Optional
+from itertools import chain
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from blender_asset import BlenderAsset
 from dataclasses import MISSING
 import carb
@@ -18,6 +19,8 @@ from blender_asset import spawn_asset
 
 from blender_asset import BlenderAsset
 
+from utils.usd_tree import PrimNode, parse_usd
+
 from pxr import Usd, UsdGeom, UsdShade, Sdf
 
 
@@ -27,9 +30,7 @@ class BlenderAssetCfg(sim_utils.MeshCfg):
 
     func: Callable = spawn_asset
 
-    xform_source: str = MISSING
-
-    mesh_source: str = MISSING
+    source_node: PrimNode = MISSING
 
     scale: list[float] = MISSING
 
@@ -92,18 +93,29 @@ def define_asset_configs(
         dict[str, BlenderAssetCfg]: Dictionary holding the asset names as keys and their corresponding configuraion as value.
     """
     # * Open the source `.usd` in a separate stage
-    BlenderAsset.reference_stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
-    BlenderAsset.reference_prim = BlenderAsset.reference_stage.GetPrimAtPath(asset_root)  # type: ignore
+    # TODO: Does this really have to be a class variable?  Maybe that's why we get problems when we try to import more than one environment
+    # BlenderAsset.reference_stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
+    # BlenderAsset.reference_prim = BlenderAsset.reference_stage.GetPrimAtPath(asset_root)  # type: ignore
+
+    stage: Usd.Stage = Usd.Stage.Open(filePath=reference_stage_path)  # type: ignore
 
     # * Go over the source and extract all relevant assets and materials
-    assets, materials = _parse_reference_prim(BlenderAsset.reference_prim)  # type: ignore
+    # root = parse_usd(BlenderAsset.reference_stage)
+    root = parse_usd(stage)
+    materials = []
+    for node in root.children.copy():
+        if node.prim.GetName() == "_materials":
+            materials.extend([child.prim for child in node.children])
+            root.children.remove(node)
+
+    # assets, materials = _parse_reference_prim(BlenderAsset.reference_prim)  # type: ignore
 
     # * Create copies of the extracted materials in the new scene
     _create_materials(materials)
 
     # * Go over the assets and define their rigid body behavior and their collision approximation method
     asset_cfgs = _parse_asset_config(
-        assets,
+        root.children,
         default_rigid_body_behavior,
         static_assets,
         dynamic_assets,
@@ -111,23 +123,19 @@ def define_asset_configs(
         asset_collision_approximation_method,
     )
 
-    # * Create RigidObjectCfgs for wach asset, in alignment with the asset_cfgs from above
-    asset_definitions = {}
-    for asset, asset_cfg in asset_cfgs.items():
-        xform_source: str = str(asset.GetPrimPath())
-        children = asset.GetAllChildren()
-        if len(children) == 0:
-            continue
-        mesh_source: str = str(asset.GetAllChildren()[0].GetPrimPath())
-
+    # * Create RigidObjectCfgs for each asset, in alignment with the asset_cfgs from above
+    asset_definitions = {
+        # Add AssetBaseCfg as grouping element for our assets
+        # "Assets": AssetBaseCfg(
+        #     prim_path=f"/World/envs/env_.*/Assets", class_type=None, spawn=None
+        # )
+    }
+    for prim_node, asset_cfg in asset_cfgs.items():
         cfg = RigidObjectCfg(
-            # prim_path=f"/World/envs/env_.*/Convenience_Store/{asset.GetName()}",
-            # TODO: Create a Scope to hold all the assets from this env or create an xform
-            prim_path=f"/World/envs/env_.*/{asset.GetName()}",
+            prim_path=f"/World/envs/env_.*/{prim_node.prim.GetName()}",
             spawn=BlenderAssetCfg(
                 func=spawn_asset,
-                xform_source=xform_source,
-                mesh_source=mesh_source,
+                source_node=prim_node,
                 scale=[0.5, 0.5, 0.5],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     rigid_body_enabled=True,
@@ -146,102 +154,27 @@ def define_asset_configs(
             ),
         )
 
-        asset_definitions[str(asset.GetName())] = cfg
+        asset_definitions[str(prim_node.prim.GetName())] = cfg
 
-    # BlenderAsset.reference_stage.Unload(asset_root)  # type: ignore
+    stage.Unload(asset_root)  # type: ignore
 
     return asset_definitions
-
-
-def _parse_reference_prim(
-    reference_prim: Usd.Prim,
-) -> tuple[list[Usd.Prim], list[Usd.Prim]]:
-    """Go over the source and extract all assets, meshes and materials. Ignore all lights.
-
-    Args:
-        reference_prim (Usd.Prim): Pointer showing to the root of the source scene.
-
-    Returns:
-        tuple[list[Usd.Prim], list[Usd.Prim]]: Returns a list of asset pointers and a list of materials.
-    """
-    # * Get all assets by recursively getting all children
-    assets: list = reference_prim.GetAllChildren()
-    for asset in assets:
-        assets.extend(asset.GetAllChildren())
-
-    # * Remove all Meshes
-    assets: list[Usd.Prim] = [asset for asset in assets if not asset.IsA(UsdGeom.Mesh)]
-
-    # * remove lights
-    # env_light
-    env_lights = list(filter(lambda x: x.GetName() == "env_light", assets))
-    for light in env_lights:
-        assets.remove(light)
-    # TODO: Find way to include lights
-    # normal lights
-    light_types = [
-        "CylinderLight",
-        "DiskLight",
-        "DistantLight",
-        "DomeLight",
-        "RectLight",
-        "SphereLight",
-    ]
-    lights = list(
-        filter(
-            lambda prim: prim.GetTypeName() in light_types
-            or any(
-                map(
-                    lambda child: child.GetTypeName() in light_types,
-                    prim.GetAllChildren(),
-                )
-            ),
-            assets,
-        )
-    )
-    for light in lights:
-        assets.remove(light)
-
-    # * Filter out materials from assets, keep them separate
-    materials = list(
-        filter(
-            lambda asset: asset.IsA(UsdShade.Material)
-            or asset.IsA(UsdGeom.Subset)
-            or "_materials" in asset.GetPath().pathString,
-            assets,
-        )
-    )
-    for material in materials:
-        assets.remove(material)
-
-    for material in materials.copy():
-        # ? Currently everything is built around "_materials" and us iterating over all its children later.This could be restricting later, when we don't have a _materials folder, but this might be default for blender
-        if material.GetName() != "_materials":
-            materials.remove(material)
-
-    # # * "Area" Assets are currently bugged
-    # For manibot, these usually refer to lights
-    for asset in assets.copy():
-        if "Area" in asset.GetPath().elementString:
-            assets.remove(asset)
-
-    return assets, materials
 
 
 def _create_materials(materials: list[Usd.Prim]) -> None:
     """Creates materials in the new scene from the given list.
 
     Args:
-        materials (list[Usd.Prim]): List with references to materials from the source scene to be created in the new scene.
+        materials (list[Usd.PrimNode]): List with references to materials from the source scene to be created in the new scene.
     """
     for material in materials:
-        BlenderAsset.copy_materials(
-            source_prim=material, target_prim_path=Sdf.Path("/World")
+        BlenderAsset.copy_material(
+            source_material=material, target_prim_path=Sdf.Path("/World")
         )
 
 
 def _parse_asset_config(
-    assets: list[Usd.Prim],
+    assets: list[PrimNode],
     default_rigid_body_behavior: Literal["static", "dynamic"] = "static",
     static_assets: Optional[list[str]] = None,
     dynamic_assets: Optional[list[str]] = None,
@@ -271,7 +204,7 @@ def _parse_asset_config(
         ]
     ] = None,
 ) -> dict[
-    Usd.Prim,
+    PrimNode,
     dict[
         Literal[
             "rigid_body_behavior",
@@ -303,7 +236,7 @@ def _parse_asset_config(
 
     # * Get all assets and define their rigid body behavior and their collision behavior
     asset_cfg: dict[
-        Usd.Prim,
+        PrimNode,
         dict[
             Literal[
                 "rigid_body_behavior",
@@ -321,17 +254,23 @@ def _parse_asset_config(
         # parse rigid bdy behavior
         if static_assets is not None:
             for pattern in static_assets:
-                if fnmatch.fnmatch(asset.GetName(), pattern.replace(".", "*") + "*"):
+                if fnmatch.fnmatch(
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
+                ):
                     asset_cfg[asset]["rigid_body_behavior"] = "static"
         if dynamic_assets is not None:
             for pattern in dynamic_assets:
-                if fnmatch.fnmatch(asset.GetName(), pattern.replace(".", "*") + "*"):
+                if fnmatch.fnmatch(
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
+                ):
                     asset_cfg[asset]["rigid_body_behavior"] = "dynamic"
 
         # parse collisions
         if asset_collision_approximation_method is not None:
             for pattern, method in asset_collision_approximation_method.items():
-                if fnmatch.fnmatch(asset.GetName(), pattern.replace(".", "*") + "*"):
+                if fnmatch.fnmatch(
+                    asset.prim.GetName(), pattern.replace(".", "*") + "*"
+                ):
                     asset_cfg[asset]["collision_approximation_method"] = method
 
     return asset_cfg
