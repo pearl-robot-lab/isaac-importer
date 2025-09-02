@@ -1,0 +1,3 @@
+[submodule "assets/pearl-robots"]
+	path = assets/pearl-robots
+	url = https://github.com/dusgor/pearl-tiago
