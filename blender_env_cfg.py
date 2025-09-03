@@ -1,6 +1,9 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
+import torch
+import yaml
 
 from isaaclab.app import AppLauncher
 
@@ -37,7 +40,7 @@ simulation_app = app_launcher.app
 
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg
+from isaaclab.assets import AssetBaseCfg, Articulation
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils.timer import Timer
@@ -49,12 +52,23 @@ from isaaclab.assets import (
 from isaacsim.core.utils.stage import get_current_stage
 from pxr import UsdGeom, Sdf
 
-from envs.airport import MANIBOT_AIRPORT
+# from envs.airport import MANIBOT_AIRPORT
 
 from envs.supermarket_full import MANIBOT_SUPERMARKET
 
-from envs.supermarket_single_isle import MANIBOT_ISLE
+# from envs.supermarket_single_isle import MANIBOT_ISLE
 
+import pearl_robots
+
+from pearl_robots.isaaclab.tiago.tiago_dual_cfg import TIAGO_DUAL
+from pearl_robots.isaaclab.tiago.tiago_tsid_formulation_wrapper import (
+    TiagoTsidFormulationWrapper,
+)
+
+# from assets.pearl_robots.assets.robot.tiago.tiago_dual_cfg import TIAGO_DUAL
+# from assets.pearl_robots.tiago_tsid_formulation_wrapper import (
+#     TiagoTsidFormulationWrapper,
+# )
 
 # TODO: Something not 100% right, when importing multiple environments.
 # In Supermarket, lamps are pink
@@ -84,11 +98,14 @@ class BlenderSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
     )
 
-    assets = MANIBOT_AIRPORT
+    # assets = MANIBOT_AIRPORT
 
     # assets = MANIBOT_ISLE
 
-    # assets = MANIBOT_SUPERMARKET
+    assets = MANIBOT_SUPERMARKET
+
+    robot = TIAGO_DUAL
+    robot.init_state.pos = (0.3, 0.0, 0.0)
 
 
 ##
@@ -98,19 +115,49 @@ def run_simulator(sim: SimulationContext, scene: InteractiveScene):
     """Runs the simulation loop."""
     # Extract scene entities
     assets: RigidObjectCollection = scene["assets"]
-    # robot: Articulation = scene["robot"]
+    robot: Articulation = scene["robot"]
+
+    # robot_cfg_file_path = os.path.join(os.path.dirname(__file__), "tiago_dual.yml")
+    # robot_cfg_file = open(robot_cfg_file_path, "r")
+    # robot_cfg = yaml.safe_load(robot_cfg_file)["robot_cfg"]  # type: ignore
+
+    # base_motion_cfg_file_path = os.path.join(
+    #     os.path.dirname(__file__), "base_tsid_motion_cfg.yml"
+    # )
+    # base_motion_cfg_file = open(base_motion_cfg_file_path, "r")
+    # base_motion_cfg = yaml.safe_load(base_motion_cfg_file)
+
+    # assets_path = os.path.join(os.path.dirname(__file__), "assets")
+    # asset_root_path = os.path.join(
+    #     assets_path, robot_cfg["kinematics"]["asset_root_path"]
+    # )
+    # urdf_path = os.path.join(assets_path, robot_cfg["kinematics"]["urdf_path"])
+
+    # # Define simulation stepping
+    # sim_dt = sim.get_physics_dt()
+    # count = 0
+    # t = 0.0
 
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
 
+    formulation = TiagoTsidFormulationWrapper(robot, control_dt=sim_dt)
+
     scene.reset()
     print("[INFO]: Resetting scene state...")
+
+    formulation.set_left_ee_pose_goal(
+        torch.tensor([0.3, 0.3, 0.3, 1.0, 0.0, 0.0, 0.0]).unsqueeze(0)
+    )
 
     # Simulation loop
     while simulation_app.is_running():
 
         # DO STUFF
+        joint_pos, joint_vel, _, _ = formulation.compute_joint_angles()
+        robot.set_joint_position_target(joint_pos)
+        robot.set_joint_velocity_target(joint_vel)
 
         # Write data to sim
         scene.write_data_to_sim()

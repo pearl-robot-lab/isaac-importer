@@ -32,7 +32,7 @@ class BlenderAssetCfg(sim_utils.MeshCfg):
 
     source_node: PrimNode = MISSING
 
-    scale: list[float] = MISSING
+    scale: tuple[float, float, float] = MISSING
 
     collision_approximation: Literal[
         "triangle_mesh",
@@ -136,7 +136,8 @@ def define_asset_configs(
             spawn=BlenderAssetCfg(
                 func=spawn_asset,
                 source_node=prim_node,
-                scale=[0.5, 0.5, 0.5],
+                # scale=[0.5, 0.5, 0.5],
+                scale=(0.4, 0.4, 0.4),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     rigid_body_enabled=True,
                     kinematic_enabled=asset_cfg["rigid_body_behavior"] == "static",

@@ -137,7 +137,9 @@ class BlenderAsset(ABC):
         new_xform = UsdGeom.Xform.Define(get_current_stage(), target_prim_path)
 
         BlenderAsset.copy_xform_attributes(
-            xform_source_prim=source_prim, xform_target=new_xform
+            xform_source_prim=source_prim,
+            xform_target=new_xform,
+            external_scale=cfg.scale,
         )
 
         # ? Copy all atributes or just the transforms?
@@ -405,7 +407,10 @@ class BlenderAsset(ABC):
 
     @classmethod
     def copy_xform_attributes(
-        cls, xform_source_prim: Usd.Prim, xform_target: UsdGeom.Xform
+        cls,
+        xform_source_prim: Usd.Prim,
+        xform_target: UsdGeom.Xform,
+        external_scale: tuple[float, float, float] | None = None,
     ) -> None:
         # xform_source = UsdGeom.Xform(xform_source_prim)
         applied_api_schemas = xform_source_prim.GetPrimTypeInfo().GetAppliedAPISchemas()
@@ -416,6 +421,12 @@ class BlenderAsset(ABC):
         if (
             translate := xform_source_prim.GetAttribute("xformOp:translate").Get()  # type: ignore
         ) is not None:
+            if external_scale is not None:
+                translate = Gf.Vec3f(
+                    translate[0] * external_scale[0],
+                    translate[1] * external_scale[1],
+                    translate[2] * external_scale[2],
+                )
             xform_target.AddTranslateOp().Set(translate)  # type: ignore
         if (
             rotate := xform_source_prim.GetAttribute("xformOp:rotateXYZ").Get()  # type: ignore
@@ -424,6 +435,12 @@ class BlenderAsset(ABC):
         if (
             scale := xform_source_prim.GetAttribute("xformOp:scale").Get()  # type: ignore
         ) is not None:
+            if external_scale is not None:
+                scale = Gf.Vec3f(
+                    scale[0] * external_scale[0],
+                    scale[1] * external_scale[1],
+                    scale[2] * external_scale[2],
+                )
             xform_target.AddScaleOp().Set(scale)  # type: ignore
         # TODO: What about order?
 
